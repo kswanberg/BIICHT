@@ -11,6 +11,9 @@ import pandas as pd
 from scipy.ndimage import gaussian_filter
 import logging 
 import sys 
+import copy 
+from skimage import img_as_ubyte
+from tifffile import imwrite
 
 def BIICHT_Master(): 
     # Courtesy of https://patorjk.com/software/taag/#p=testall&f=Graffiti&t=BIICHT
@@ -45,19 +48,19 @@ def BIICHT_Master():
           following the blur step before binarization. 
                Example: 20
            
-          5    "Mask_Blurring": Sigma value defining the extent of Gaussian blur (implemented by scipy.ndimage's "gaussian_filter" function) applied to the "Mask" 
+          5    "Mask_Blur": Sigma value defining the extent of Gaussian blur (implemented by scipy.ndimage's "gaussian_filter" function) applied to the "Mask" 
           reference image for image denoising prior to thresholding and binarization. Note that no blurring is applied to any final image; rather, this is a denoising step 
           for defining the binarized mask.  
                Example: 16
            
           Header and full first line of example input CSV: 
            
-          Data, Mask, Data_Threshold, Mask_Threshold, Mask_Blurring
+          Data, Mask, Data_Threshold, Mask_Threshold, Mask_Blur
           C:\\Users\\kswanberg\\DAPI_lectin_collagen\\GLU01-1_647.tif, C:\\Users\\kswanberg\\DAPI_lectin_collagen\\GLU01-1_DAPI.tif, 100, 20, 16
           \n\n""")
      
      # Set working directory to location of file 
-     #os.chdir(sys.path[0])
+     os.chdir(sys.path[0])
 
      # Create output directory 
      time_for_dirname = datetime.datetime.now() 
@@ -103,11 +106,11 @@ def BIICHT_Master():
           mask_blur = data['Mask_Blur'][ii]
 
           # Run analysis kernel on image and mask pair 
-          mask_px, image_px, image_px_normalized = Masking_to_Average_kernel(image_loc, mask_loc, image_threshold, mask_threshold, mask_blur, root_dirname)
-          analysis_outputs.append([image_loc, mask_loc, image_threshold, mask_threshold, mask_blur, int(mask_px), int(image_px), float(image_px_normalized)])
+          mask_px, image_px, image_px_normalized,  image_sum_of_intensities_val, image_sum_of_intensities_normalized_val = Masking_to_Average_kernel(image_loc, mask_loc, image_threshold, mask_threshold, mask_blur, root_dirname)
+          analysis_outputs.append([image_loc, mask_loc, image_threshold, mask_threshold, mask_blur, int(mask_px), int(image_px), float(image_px_normalized), float(image_sum_of_intensities_val), float(image_sum_of_intensities_normalized_val)])
           plt.close()
      
-     analysis_outputs_df = pd.DataFrame(analysis_outputs, columns=['Data', 'Mask', 'Data_Threshold', 'Mask_Threshold', 'Mask_Blur', 'Binary_Mask_Px_N', 'Thresholded_Masked_Image_Px_N', 'Thresholded_Masked_Image_Px_N_Normalized'])
+     analysis_outputs_df = pd.DataFrame(analysis_outputs, columns=['Data', 'Mask', 'Data_Threshold', 'Mask_Threshold', 'Mask_Blur', 'Binary_Mask_Px_N', 'Thresholded_Masked_Image_Px_N', 'Thresholded_Masked_Image_Px_N_Normalized', 'Summed_Intensities', 'Summed_Intensities_Normalized'])
 
      # Save data outputs to CSV 
      csv_to_save_eu = str(root_dirname + '\\' 'Contrast_statistics_normalized_eu.csv')
@@ -126,7 +129,7 @@ def Masking_to_Average_kernel(image_loc_var, mask_loc_var, data_threshold_var, m
 
      # Load image 
      try:
-          image_pre_threshold = cv2.imread(image_loc_var)
+          image_pre_threshold = cv2.imread(image_loc_var, cv2.IMREAD_UNCHANGED)
           logging.info("Loaded image %s", image_loc_var)
      except:
           logging.error("Could not load image %s", image_loc_var)
@@ -150,7 +153,7 @@ def Masking_to_Average_kernel(image_loc_var, mask_loc_var, data_threshold_var, m
 
      # Load mask 
      try: 
-          mask_pre_threshold_unblurred = cv2.imread(mask_loc_var)
+          mask_pre_threshold_unblurred = cv2.imread(mask_loc_var, cv2.IMREAD_UNCHANGED)
           print("Loaded mask ", mask_loc_var)
           logging.info("Loaded mask %s", mask_loc_var)
      except: 
@@ -220,7 +223,8 @@ def Masking_to_Average_kernel(image_loc_var, mask_loc_var, data_threshold_var, m
      # Convert the thresholded mask to grayscale and then binary 
      try: 
           print("Converting mask to grayscale for binarization... ") 
-          mask_thresholded_grayscale = cv2.cvtColor(mask_thresholded, cv2.COLOR_BGR2GRAY)
+          #mask_thresholded_grayscale = cv2.cvtColor(mask_thresholded, cv2.COLOR_BGR2GRAY)
+          mask_thresholded_grayscale = mask_thresholded.copy(); 
           print("Converted to greyscale for mask ", mask_loc_var) 
           logging.info("Converted to greyscale for mask %s", mask_loc_var) 
      except: 
@@ -234,7 +238,7 @@ def Masking_to_Average_kernel(image_loc_var, mask_loc_var, data_threshold_var, m
           logging.info("Could not convert to binary for mask %s", mask_loc_var) 
      
      try: 
-          image_thresholded_and_masked = cv2.bitwise_and(image_thresholded_and_masked, image_thresholded_and_masked, mask = mask_thresholded_grayscale_binary_mask)
+          image_thresholded_and_masked_for_analysis = cv2.bitwise_and(image_thresholded_and_masked, image_thresholded_and_masked, mask = img_as_ubyte(mask_thresholded_grayscale_binary_mask)); 
           print("Applied mask ", mask_loc_var, "to image ", image_loc_var) 
           logging.info("Applied mask %s to image %s", mask_loc_var, image_loc_var) 
      except: 
@@ -242,7 +246,8 @@ def Masking_to_Average_kernel(image_loc_var, mask_loc_var, data_threshold_var, m
 
      try:      
           print("Converting image to grayscale for final intensity calculation... ") 
-          image_thresholded_and_masked_grayscale = cv2.cvtColor(image_thresholded_and_masked, cv2.COLOR_BGR2GRAY)
+          #image_thresholded_and_masked_grayscale = cv2.cvtColor(image_thresholded_and_masked, cv2.COLOR_BGR2GRAY)
+          image_thresholded_and_masked_grayscale = image_thresholded_and_masked_for_analysis.copy(); 
           print("Converted to greyscale for masked image ", image_loc_var) 
           logging.info("Converted to greyscale for masked image %s", image_loc_var) 
      except: 
@@ -256,10 +261,10 @@ def Masking_to_Average_kernel(image_loc_var, mask_loc_var, data_threshold_var, m
      plt.imshow(mask_thresholded_grayscale_binary_mask)
      plt.title('Thresholded Mask as Binary')
      fig.add_subplot(1, 3, 2) 
-     plt.imshow(image_thresholded_and_masked)
+     plt.imshow(image_thresholded_and_masked_for_analysis)
      plt.title('Thresholded and Masked Image')
      fig.add_subplot(1, 3, 3) 
-     plt.imshow(image_thresholded_and_masked)
+     plt.imshow(image_thresholded_and_masked_for_analysis)
      plt.imshow(mask_thresholded_grayscale_binary_mask, cmap='jet', alpha=0.5)
      plt.title('Image Result with Mask Overlay')
 
@@ -272,23 +277,41 @@ def Masking_to_Average_kernel(image_loc_var, mask_loc_var, data_threshold_var, m
      except: 
           logging.error("Figure 2 could not be saved as %s", fig_name) 
 
+     # Save final thresholded mask and final thresholded and masked image as TIFFs
+     img1_name = str(dir_name + '\\00_Thresholded_Binary_Mask.tif'); 
+     try: 
+          imwrite(img1_name, img_as_ubyte(mask_thresholded_grayscale_binary_mask), imagej=True); 
+          logging.info("Image 1 saved as %s", img1_name); 
+     except: 
+          logging.error("Image 1 could not be saved as %s", img1_name); 
+     
+     img2_name = str(dir_name + '\\01_Masked_and_Thresholded_Image.tif'); 
+     try: 
+          imwrite(img2_name, image_thresholded_and_masked_for_analysis, imagej=True); 
+          logging.info("Image 2 saved as %s", img2_name); 
+     except:
+          logging.error("Image 2 could not be saved as %s", img2_name); 
+
      # Average the image pixel intensities normalized by mask area 
      mask_number_of_px = mask_thresholded_grayscale_binary_mask[mask_thresholded_grayscale_binary_mask != 0].size # Calculates number of pixels to be considered 
-     # image_sum_of_intensities = np.sum(image_thresholded_and_masked) # Calculates sum of pixel intensities
-     image_thresholded_and_masked_number_of_px = image_thresholded_and_masked_grayscale[image_thresholded_and_masked_grayscale != 0].size # Note that this has to be converted to greyscale first 
+     image_sum_of_intensities = np.sum(image_thresholded_and_masked_for_analysis, dtype=np.int64) # Calculates sum of pixel intensities
+     #image_sum_of_intensities = np.sum(image_thresholded_and_masked_grayscale); 
+     image_thresholded_and_masked_number_of_px = image_thresholded_and_masked_for_analysis[image_thresholded_and_masked_for_analysis != 0].size # Note that this has to be converted to greyscale first 
      image_thresholded_and_masked_number_of_px_normalized = image_thresholded_and_masked_number_of_px / mask_number_of_px; 
+     image_sum_of_intensities_normalized = image_sum_of_intensities / mask_number_of_px; 
 
      try: 
           print("BIICHT processing completed for ", image_loc_var) 
           logging.info("BIICHT processing completed for %s", image_loc_var) 
-          return [mask_number_of_px, image_thresholded_and_masked_number_of_px, image_thresholded_and_masked_number_of_px_normalized]
+          return [mask_number_of_px, image_thresholded_and_masked_number_of_px, image_thresholded_and_masked_number_of_px_normalized, image_sum_of_intensities, image_sum_of_intensities_normalized]
      except: 
           logging.error("BIICHT exited with an error for ", image_loc_var) 
 
 def Threshold_and_Mask_Image(image_to_threshold_var, image_name_var, threshold_value_var, polarity_var): 
      
       # Convert image to grayscale as threshold preprocessing 
-     image_pre_threshold_grayscale = cv2.cvtColor(image_to_threshold_var, cv2.COLOR_BGR2GRAY)
+     #image_pre_threshold_grayscale = cv2.cvtColor(image_pre_threshold_grayscale, cv2.COLOR_BGR2GRAY)
+     image_pre_threshold_grayscale = image_to_threshold_var.copy(); 
      histogram, bin_edges = np.histogram(image_pre_threshold_grayscale, bins = 512)
      fig, ax = plt.subplots()
      plt.plot(histogram)
@@ -308,7 +331,7 @@ def Threshold_and_Mask_Image(image_to_threshold_var, image_name_var, threshold_v
 
      # Use threshold mask to select only part of the image 
      image_thresholded_var = image_to_threshold_var.copy()
-     image_thresholded_var = cv2.bitwise_and(image_thresholded_var, image_thresholded_var, mask = image_threshold_binary_mask)
+     image_thresholded_var = cv2.bitwise_and(image_thresholded_var, image_thresholded_var, mask = img_as_ubyte(image_threshold_binary_mask))
      #plt.imshow(image_thresholded_var)
      #plt.show() 
 
